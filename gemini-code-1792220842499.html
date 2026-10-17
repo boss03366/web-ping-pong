@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>網頁版桌球對決 - Vibe Coding</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        body {
+            background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            overflow: hidden;
+        }
+        h1 {
+            margin-bottom: 10px;
+            font-size: 2rem;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        .scoreboard {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 8px 25px;
+            border-radius: 30px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            letter-spacing: 2px;
+        }
+        .canvas-container {
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 4px solid #fff;
+        }
+        canvas {
+            display: block;
+            background: #1b5e20;
+            cursor: none;
+        }
+        .instructions {
+            margin-top: 15px;
+            font-size: 0.95rem;
+            color: #ddd;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px 15px;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🏓 網頁版桌球對決</h1>
+    <div class="scoreboard" id="scoreboard">玩家 (你): 0 | 電腦 AI: 0</div>
+    
+    <div class="canvas-container">
+        <canvas id="pongCanvas" width="800" height="500"></canvas>
+    </div>
+
+    <div class="instructions">
+        💡 操作方式：使用<b>滑鼠游標</b>上下移動來控制下方球拍，先得 5 分者獲勝！
+    </div>
+
+    <script>
+        const canvas = document.getElementById('pongCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreboard = document.getElementById('scoreboard');
+
+        // 音效合成器 (Web Audio API)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(freq, type, duration) {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        // 遊戲變數
+        let playerScore = 0;
+        let aiScore = 0;
+        const winningScore = 5;
+        let gameOver = false;
+
+        // 球拍設定
+        const paddleWidth = 12;
+        const paddleHeight = 100;
+        
+        const player = {
+            x: 30,
+            y: canvas.height / 2 - paddleHeight / 2,
+            width: paddleWidth,
+            height: paddleHeight,
+            score: 0
+        };
+
+        const ai = {
+            x: canvas.width - 30 - paddleWidth,
+            y: canvas.height / 2 - paddleHeight / 2,
+            width: paddleWidth,
+            height: paddleHeight,
+            score: 0
+        };
+
+        // 桌球設定
+        const ball = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            radius: 10,
+            speed: 6,
+            velocityX: 6,
+            velocityY: 4
+        };
+
+        // 滑鼠控制玩家球拍
+        canvas.addEventListener('mousemove', (evt) => {
+            let rect = canvas.getBoundingClientRect();
+            let root = document.documentElement;
+            let mouseY = evt.clientY - rect.top - root.scrollTop;
+            player.y = mouseY - player.height / 2;
+
+            // 限制球拍不出界
+            if (player.y < 0) player.y = 0;
+            if (player.y > canvas.height - player.height) {
+                player.y = canvas.height - player.height;
+            }
+        });
+
+        // 重設球位置
+        function resetBall(winner) {
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            ball.speed = 6;
+            // 讓輸的一方發球
+            ball.velocityX = winner === 'player' ? -6 : 6;
+            ball.velocityY = (Math.random() * 4 - 2);
+        }
+
+        // 碰撞偵測
+        function collision(b, p) {
+            b.top = b.y - b.radius;
+            b.bottom = b.y + b.radius;
+            b.left = b.x - b.radius;
+            b.right = b.x + b.radius;
+
+            p.top = p.y;
+            p.bottom = p.y + p.height;
+            p.left = p.x;
+            p.right = p.x + p.width;
+
+            return b.right > p.left && b.bottom > p.top && b.left < p.right && b.top < p.bottom;
+        }
+
+        // 更新遊戲邏輯
+        function update() {
+            if (gameOver) return;
+
+            // 移動球
+            ball.x += ball.velocityX;
+            ball.y += ball.velocityY;
+
+            // AI 簡單追蹤邏輯
+            let aiSpeed = 0.08; // AI靈敏度
+            ai.y += (ball.y - (ai.y + ai.height / 2)) * aiSpeed;
+            if (ai.y < 0) ai.y = 0;
+            if (ai.y > canvas.height - ai.height) ai.y = canvas.height - ai.height;
+
+            // 上下牆壁反彈
+            if (ball.y - ball.radius < 0 || ball.y + ball.radius > canvas.height) {
+                ball.velocityY = -ball.velocityY;
+                playSound(300, 'sine', 0.1);
+            }
+
+            // 判斷得分
+            if (ball.x - ball.radius < 0) {
+                aiScore++;
+                playSound(150, 'sawtooth', 0.3);
+                if (aiScore >= winningScore) {
+                    gameOver = true;
+                } else {
+                    resetBall('ai');
+                }
+                updateScoreboard();
+            } else if (ball.x + ball.radius > canvas.width) {
+                playerScore++;
+                playSound(600, 'triangle', 0.3);
+                if (playerScore >= winningScore) {
+                    gameOver = true;
+                } else {
+                    resetBall('player');
+                }
+                updateScoreboard();
+            }
+
+            // 判斷球擊中哪個球拍
+            let activePaddle = (ball.x < canvas.width / 2) ? player : ai;
+
+            if (collision(ball, activePaddle)) {
+                playSound(440, 'sine', 0.1);
+                // 計算打中球拍的相對位置以改變反彈角度
+                let collidePoint = ball.y - (activePaddle.y + activePaddle.height / 2);
+                collidePoint = collidePoint / (activePaddle.height / 2);
+                
+                let angleRad = (Math.PI / 4) * collidePoint;
+                let direction = (ball.x < canvas.width / 2) ? 1 : -1;
+
+                ball.velocityX = direction * ball.speed * Math.cos(angleRad);
+                ball.velocityY = ball.speed * Math.sin(angleRad);
+
+                // 每次擊球稍微加速
+                ball.speed += 0.3;
+            }
+        }
+
+        function updateScoreboard() {
+            scoreboard.innerText = `玩家 (你): ${playerScore} | 電腦 AI: ${aiScore}`;
+        }
+
+        // 繪製畫面
+        function draw() {
+            // 清空畫面（桌球檯背景）
+            ctx.fillStyle = '#1b5e20';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 繪製中線（球網）
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.lineWidth = 4;
+            ctx.setLineDash([10, 10]);
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, 0);
+            ctx.lineTo(canvas.width / 2, canvas.height);
+            ctx.stroke();
+            ctx.setLineDash([]); // 重設虛線
+
+            // 繪製球拍
+            ctx.fillStyle = '#ffeb3b';
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            ctx.fillStyle = '#00bcd4';
+            ctx.fillRect(ai.x, ai.y, ai.width, ai.height);
+
+            // 繪製桌球
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2, false);
+            ctx.closePath();
+            ctx.fill();
+
+            // 遊戲結束畫面
+            if (gameOver) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 40px sans-serif';
+                ctx.textAlign = 'center';
+                let winText = playerScore >= winningScore ? '🎉 恭喜你獲得勝利！' : '😢 可惜，電腦獲勝了！';
+                ctx.fillText(winText, canvas.width / 2, canvas.height / 2 - 30);
+
+                ctx.font = '20px sans-serif';
+                ctx.fillStyle = '#fdbb2d';
+                ctx.fillText('點擊畫面任意處即可重新開始遊戲', canvas.width / 2, canvas.height / 2 + 30);
+            }
+        }
+
+        // 遊戲主迴圈
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 點擊重新開始
+        canvas.addEventListener('click', () => {
+            if (gameOver) {
+                playerScore = 0;
+                aiScore = 0;
+                gameOver = false;
+                updateScoreboard();
+                resetBall('player');
+            }
+        });
+
+        // 啟動遊戲
+        updateScoreboard();
+        gameLoop();
+    </script>
+</body>
+</html>
